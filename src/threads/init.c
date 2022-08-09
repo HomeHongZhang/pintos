@@ -63,6 +63,7 @@ static void paging_init (void);
 static char **read_command_line (void);
 static char **parse_options (char **argv);
 static void run_actions (char **argv);
+static void run_kernel_shell (void);
 static void usage (void);
 
 #ifdef FILESYS
@@ -134,6 +135,7 @@ pintos_init (void)
     run_actions (argv);
   } else {
     // TODO: no command line passed to kernel. Run interactively 
+    run_kernel_shell ();
   }
 
   /* Finish up. */
@@ -345,6 +347,57 @@ run_actions (char **argv)
       argv += a->argc;
     }
   
+}
+
+/** A tiny kernel shell run when no argument passed in the command 
+    line while start the Pintos.
+    It just supports two commands: 
+      - whoami
+      - exit
+    If the other command was typed, it just ignore and print the 
+    message `invalid command` into the console. */
+static void 
+run_kernel_shell (void)
+{
+  start:
+    /** Starts with a promot 'PKUOS>' and wait for user input */
+    printf("%s", "PKUOS>");    
+
+    /** As the user types in a printable character, display the character. */
+    uint8_t buf[512];
+    memset(buf, 0, 512);
+    for (int i = 0; i < 512; i++) 
+    {
+      uint8_t ch = input_getc();
+      if (ch == 10 || ch == 13) break; // 10 == '\n', 13 is carrage return
+      printf("%c", ch);
+      buf[i] = ch;
+    } 
+
+    /** When a newline is entered, it parses the input and checks if it is 
+         whoami. If it is whoami, print your student id. Afterward, the 
+         monitor will print the command prompt PKUOS> again in the next 
+         line and repeat. */
+    if (0 == memcmp(buf, "whoami", 6))
+    {
+      printf("\n2021215256\n");
+goto start;
+    }
+
+    /** If the user input is exit, the monitor will quit to allow the kernel 
+        to finish.  */
+    else if (0 == memcmp(buf, "exit", 4))
+    {
+      return;
+    }
+
+    /** For the other input, print invalid command. Handling 
+        special input such as backspace is not required. */
+    else
+    {
+        printf("\n%s\n", "invalid command");
+  goto start;
+    }
 }
 
 /** Prints a kernel command line help message and powers off the
