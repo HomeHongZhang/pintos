@@ -93,6 +93,19 @@ struct thread
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /**< List element. */
 
+   /* Used for timer scheduling */
+    int64_t ticks;                      /**< Thread timer ticks. */  
+
+   /* Used for priority scheduling */
+    int priority_no_donation;           /**< The priority without donation. */
+    struct list locks;                  /**< The locks that the thread is holding. */
+    struct lock * wait_on_lock;         /**< The lock that the thread is waiting on.
+                                              NULL if not waiting on any lock. */
+
+   /* Used for FreeBSD scheduling */
+    int nice;
+    int recent_cpu;
+
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /**< Page directory. */
@@ -137,5 +150,24 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
+
+bool thread_cmp_ticks (const struct list_elem * a,
+                  const struct list_elem * b,
+                  void *aux UNUSED);
+
+bool thread_cmp_priority (const struct list_elem * a,
+                  const struct list_elem * b,
+                  void *aux UNUSED);
+
+bool thread_cmp_pri_cond (const struct list_elem * a,
+                  const struct list_elem * b,
+                  void *aux UNUSED);
+
+void thread_hold_lock (struct lock * lk);
+void thread_remove_lock (struct lock * lk);
+void thread_donate_priority (struct thread * th);
+void thread_update_priority (struct thread * th);
+
+
 
 #endif /**< threads/thread.h */

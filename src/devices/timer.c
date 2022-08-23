@@ -17,12 +17,23 @@
 #error TIMER_FREQ <= 1000 recommended
 #endif
 
+/** Used for BSD scheduler. */
+#define RECALC_FREQ 4
+
 /** Number of timer ticks since OS booted. */
 static int64_t ticks;
+
+/** Lock to make sure the `lock_list` would be acquired by
+     only one thread. */
+static struct lock lk;
 
 /** Number of loops per timer tick.
    Initialized by timer_calibrate(). */
 static unsigned loops_per_tick;
+
+/** List of processes in THREAD_READY state, that is, processes
+   that are ready to run but not actually running. */
+static struct list block_list;
 
 static intr_handler_func timer_interrupt;
 static bool too_many_loops (unsigned loops);
@@ -37,6 +48,8 @@ timer_init (void)
 {
   pit_configure_channel (0, 2, TIMER_FREQ);
   intr_register_ext (0x20, timer_interrupt, "8254 Timer");
+  list_init(&block_list);
+  lock_init(&lk);
 }
 
 /** Calibrates loops_per_tick, used to implement brief delays. */
@@ -89,11 +102,26 @@ timer_elapsed (int64_t then)
 void
 timer_sleep (int64_t ticks) 
 {
-  int64_t start = timer_ticks ();
-
+  /* Make sure the validation of the parameter */
+  if (ticks <= 0) return;
+  
   ASSERT (intr_get_level () == INTR_ON);
-  while (timer_elapsed (start) < ticks) 
-    thread_yield ();
+  
+  /* Put the thread to sleep in timer sleep queue */
+  
+  enum intr_level old_level;  
+  ASSERT (!intr_context ());
+  old_level = intr_disable ();
+  
+  //lock_acquire  (&lk);
+  
+  thread_current ()->ticks = timer_ticks() + ticks;
+  list_insert_ordered (&block_list, &thread_current ()->elem, thread_cmp_ticks, NULL);  
+  thread_block ();
+
+  //lock_release (&lk);
+  
+  intr_set_level (old_level);
 }
 
 /** Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -172,6 +200,30 @@ timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
   thread_tick ();
+
+  /* Thread must quit sleep and also free its successor if that thread needs
+      to wakeup at the same time. */
+  enum intr_level old_level = intr_disable ();
+  struct list_elem * e;
+  struct thread * th;
+
+  for (e = list_begin (&block_list); e != list_end (&block_list); e = list_begin (&block_list))
+  {
+    
+    th = list_entry (e, struct thread, elem);
+    
+    if (ticks < th->ticks)
+    {
+      break;
+    }
+
+    //lock_acquire (&lk);
+    list_remove (e);
+    //lock_release (&lk);
+
+    thread_unblock(th);
+  }
+  intr_set_level (old_level);  
 }
 
 /** Returns true if LOOPS iterations waits for more than one timer

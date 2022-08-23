@@ -201,6 +201,13 @@ thread_create (const char *name, int priority,
   /* Add to run queue. */
   thread_unblock (t);
 
+  /* If the creating thread's proirity is higher than the current's,
+      then the current thread gives up the cpu so that the newest 
+      created one can run. */
+  if (priority > thread_current ()->priority)
+  {
+    thread_yield ();
+  }
   return tid;
 }
 
@@ -236,8 +243,8 @@ thread_unblock (struct thread *t)
   ASSERT (is_thread (t));
 
   old_level = intr_disable ();
-  ASSERT (t->status == THREAD_BLOCKED);
-  list_push_back (&ready_list, &t->elem);
+  ASSERT (t->status == THREAD_BLOCKED);  
+  list_insert_ordered (&ready_list, &t->elem, thread_cmp_priority, NULL);
   t->status = THREAD_READY;
   intr_set_level (old_level);
 }
@@ -307,10 +314,15 @@ thread_yield (void)
   ASSERT (!intr_context ());
 
   old_level = intr_disable ();
-  if (cur != idle_thread) 
-    list_push_back (&ready_list, &cur->elem);
-  cur->status = THREAD_READY;
-  schedule ();
+  if (cur != idle_thread && !list_empty (&ready_list)) 
+  {
+    if (list_entry (list_front (&ready_list), struct thread, elem)->priority >= cur->priority)
+    {
+      list_insert_ordered (&ready_list, &cur->elem, thread_cmp_priority, NULL);
+      cur->status = THREAD_READY;
+      schedule ();
+    }    
+  }
   intr_set_level (old_level);
 }
 
@@ -335,7 +347,19 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
-  thread_current ()->priority = new_priority;
+  if (thread_mlfqs) return;
+
+  enum intr_level old_level = intr_disable ();
+  
+  int old_priority = thread_current ()->priority;
+  thread_current ()->priority_no_donation = new_priority;
+  
+  if (new_priority < old_priority && list_empty (&thread_current ()->locks))
+  {
+    thread_yield ();
+  }
+  
+  intr_set_level (old_level);
 }
 
 /** Returns the current thread's priority. */
@@ -462,10 +486,13 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
+  t->priority_no_donation = priority;
+  list_init (&t->locks);
+  t->wait_on_lock = NULL;
   t->magic = THREAD_MAGIC;
 
   old_level = intr_disable ();
-  list_push_back (&all_list, &t->allelem);
+  list_insert_ordered (&all_list, &t->allelem, thread_cmp_priority, NULL);
   intr_set_level (old_level);
 }
 
@@ -582,3 +609,107 @@ allocate_tid (void)
 /** Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);
+
+/* Keep block_list as nondescending order */
+bool 
+thread_cmp_ticks (const struct list_elem * a,
+                  const struct list_elem * b,
+                  void *aux UNUSED)
+{
+  struct thread * ta = list_entry (a, struct thread, elem); 
+  struct thread * tb = list_entry (b, struct thread, elem); 
+  
+  return ta->ticks < tb->ticks;
+}
+
+/* Keep priority_list as nonascending order */
+bool 
+thread_cmp_priority (const struct list_elem * a,
+                  const struct list_elem * b,
+                  void *aux UNUSED)
+{
+  struct thread * ta = list_entry (a, struct thread, elem); 
+  struct thread * tb = list_entry (b, struct thread, elem); 
+  
+  return ta->priority > tb->priority;
+}
+
+bool 
+thread_cmp_pri_cond (const struct list_elem * a,
+                  const struct list_elem * b,
+                  void *aux UNUSED)
+{
+  struct thread * ta = list_entry (a, struct semaphore_elem, elem)->owner; 
+  struct thread * tb = list_entry (b, struct semaphore_elem, elem)->owner; 
+  
+  return ta->priority > tb->priority;
+}
+
+void 
+thread_hold_lock (struct lock * lk)
+{
+  enum intr_level old_level = intr_disable ();
+
+  list_insert_ordered (&thread_current()->locks, &lk->elem, lock_cmp_priority, NULL);
+
+  if (thread_current ()->priority < lk->max_priority)
+  {
+    thread_current ()->priority = lk->max_priority;
+    thread_yield ();
+  }
+
+  intr_set_level (old_level);
+}
+
+void 
+thread_remove_lock (struct lock * lk)
+{
+  enum intr_level old_level = intr_disable ();
+
+  list_remove (&lk->elem);
+  thread_update_priority (thread_current ());
+
+  intr_set_level (old_level);
+}
+
+/* Donate current thread's priority to th's */
+void 
+thread_donate_priority (struct thread * th)
+{
+  enum intr_level old_level = intr_disable ();
+
+  thread_update_priority (th);
+  if (th->status == THREAD_READY)
+  {
+    list_remove (&th->elem);
+    list_insert_ordered (&ready_list, &th->elem, thread_cmp_priority, NULL);
+  }
+
+  intr_set_level (old_level);
+}
+
+/* Update th's priority */
+void 
+thread_update_priority (struct thread * th)
+{
+  enum intr_level old_level = intr_disable ();
+
+  int max_priority = th->priority_no_donation;
+  int lock_priority;
+  
+  if (!list_empty (&th->locks))
+  {
+    list_sort (&th->locks, lock_cmp_priority, NULL);
+    lock_priority = list_entry (list_front (&th->locks), struct lock, elem)->max_priority;
+
+    if (lock_priority > max_priority)
+    {
+      max_priority = lock_priority;
+    }
+  }
+
+  th->priority = max_priority;
+
+  intr_set_level (old_level);
+}
+
