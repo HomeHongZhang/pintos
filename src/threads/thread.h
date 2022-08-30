@@ -167,6 +167,9 @@ void thread_hold_lock (struct lock * lk);
 void thread_remove_lock (struct lock * lk);
 void thread_donate_priority (struct thread * th);
 void thread_update_priority (struct thread * th);
+void thread_mlfqs_increase_recent_cpu_by_one (void);
+void thread_mlfqs_update_priority (struct thread * th);
+void thread_mlfqs_update_load_avg_and_recent_cpu (void);
 
 
 

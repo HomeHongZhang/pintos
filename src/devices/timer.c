@@ -204,6 +204,21 @@ timer_interrupt (struct intr_frame *args UNUSED)
   /* Thread must quit sleep and also free its successor if that thread needs
       to wakeup at the same time. */
   enum intr_level old_level = intr_disable ();
+
+  if (thread_mlfqs)
+  {
+    thread_mlfqs_increase_recent_cpu_by_one ();
+    if (ticks % TIMER_FREQ == 0)
+    {
+        thread_mlfqs_update_load_avg_and_recent_cpu ();
+    }
+
+    if (ticks % 4 == 0)
+    {
+        thread_mlfqs_update_priority (thread_current ());
+    }
+  }
+
   struct list_elem * e;
   struct thread * th;
 
